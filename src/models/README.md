@@ -197,3 +197,96 @@ If the loss stays >2.0 or recall is at-baseline, suspect:
 - Item text features not actually being read in (check `text_embeddings.npy` shape).
 - Bug in negative sampling (every item ranked equally — check the diagonal of the softmax).
 - Learning rate too high (drop to 5e-4).
+
+---
+
+## Known limitations (v1)
+
+The trained model learns category routing **perfectly** (`cat_match@1 = 100%` on held-out pairs) but is weak at picking the exact item within a category (`recall@10 ≈ 1.35%` vs random 0.25%, so ~5× random). Final loss after 10 epochs is 3.81 — meaningfully below the random baseline of `log(128) = 4.85`, but well above what's achievable on real data. Two root causes:
+
+### 1. Templated text looks too similar to MiniLM
+
+The synthetic dataset uses templated titles like *"Reducing {topic}: {modifier}"*. All "AI Infrastructure" titles share most of their words, so MiniLM places them in nearly the same region of its 384-d space. The item tower can tell *AI Infra* from *Travel* but cannot tell AI-Infra item #5 from item #12.
+
+> **This disappears with real (non-templated) text.** Production titles have varied vocabulary, length, and style, and MiniLM separates them well.
+
+### 2. In-batch sampled softmax has a false-negative problem
+
+Each batch gives one positive and 127 in-batch negatives. When user A and user B both like Travel, and the batch has `(A → travel_X)` and `(B → travel_Y)`, the loss says *"for user A, rank travel_Y LOW"* — but A would actually like travel_Y too. The training signal contradicts itself for within-category items, and the model effectively gives up trying to push within-category items toward each other in the embedding space.
+
+This manifests as: training for too many epochs makes within-category recall *worse*, not better. We saw `recall@10` drop from 1.35% (10 epochs) to 0.6% (25 epochs).
+
+### Why this is acceptable for v1
+
+The RecoForge demo is *"click Travel → see more Travel."* That only needs **shelf-level routing**, which the model nails 100% of the time. Within-shelf ordering comes from other parts of the system, not from the model's fingerprints:
+
+- **Session blending** averages recent item embeddings — coarse fingerprints are fine as long as they're in the right cluster.
+- **Trending / fresh / category candidate generators** (Phase 5) handle within-category ranking via popularity and recency, not embedding similarity.
+- **The ranking layer** (Phase 5) combines all of these signals.
+
+### Diagnostic numbers (10-epoch run, seed=42)
+
+| Metric | Value | Random baseline | Interpretation |
+|---|---:|---:|---|
+| Final loss | 3.81 | 4.85 | ~2.8× better than random |
+| Mean diag cosine | 0.51 | 0.00 | True (user, item) pairs are similar |
+| Mean off-diag cosine | 0.25 | 0.00 | In-batch negatives have residual category overlap |
+| Diag − off-diag gap | **0.26** | 0.00 | What drives retrieval quality |
+| `cat_match@1` | **100.0%** | ~25%* | Top-1 always in user's interests |
+| `recall@10` | 1.35% | 0.25% | 5.4× random |
+| `hit@1` | 0.10% | 0.025% | 4× random |
+
+*Random `cat_match@1` ≈ user's interest count / 12 categories ≈ 2/12 ≈ 17%.
+
+---
+
+## V2 fixes (when this matters)
+
+In rough order of effort vs payoff:
+
+### 1. Decoupled negative sampling — cheapest, biggest single win
+
+Replace in-batch negatives with **random items drawn from the full catalog**. Each positive gets ~256 random negatives sampled uniformly. Random items rarely overlap with the user's interests, so the false-negative problem disappears.
+
+- **Cost:** ~20 LOC change to the training loop. Add a `random_negatives_per_positive` argument; sample item indices uniformly per batch; build the score matrix as `user_emb @ random_item_emb.T`.
+- **Trade-off:** random negatives are easy. The model learns coarse distinctions (Travel ≠ Cooking) but doesn't have to work at fine ones. Recall@10 typically jumps 3–10×; recall@1 improves modestly.
+
+### 2. Sampled-softmax bias correction — one-line fix
+
+Popular items appear in many batches and get marked "negative" disproportionately often. Subtract `log P(item)` from each logit before the softmax — the standard sampled-softmax bias correction.
+
+- **Cost:** one extra term in the loss + a one-time pass to count empirical item frequencies on the training set.
+- **Impact:** prevents the model from over-penalizing popular items. Especially useful when paired with random/uniform negatives.
+
+```python
+# Before: loss is unfairly harsh on popular items
+log_probs = F.log_softmax(scores, dim=1)
+
+# After: subtract log P(item) — popular items get a "discount"
+log_probs = F.log_softmax(scores - log_p_item.unsqueeze(0), dim=1)
+```
+
+### 3. Hard-negative mining — most work, biggest ceiling
+
+Random negatives are too easy. Periodically run the current model, find items it ranks high for a user but the user didn't engage with, and use those as next-round negatives. Forces within-category discrimination.
+
+- **Cost:** ~80 LOC, two-stage training pipeline. Need to retrain after each mining pass.
+- **Risk:** hard negatives can be too hard early in training and collapse the model. Standard mitigation: start with random negatives and gradually mix in harder ones (curriculum).
+- **Impact:** the only fix that materially improves *within-category* discrimination. Production two-tower systems almost always use some form of this.
+
+### Other limitations worth noting
+
+- **Frozen MiniLM** is general-purpose. Fine-tuning it on the engagement signal would help, but we don't have the data scale to do that responsibly.
+- **No creator-side features.** `creator_id` is in the items file but ignored by the item tower. Adding a creator embedding could capture "users who like creator X also like ..." patterns.
+- **1% `<UNK>` dropout** is a guess from CLIP-style cold-start papers. Production systems often go 5–10%, especially when the cold-start path is heavily used.
+- **No temporal features beyond freshness.** Hour-of-day and day-of-week patterns are absent from both the dataset and the model.
+- **Single-stage training.** Industry systems often pretrain on weak labels (impressions / clicks) then fine-tune on strong labels (saves / shares). We treat all events equally weighted by `event_weight`.
+
+### When to actually invest in V2
+
+For the **demo**: never. Category routing is enough.
+
+For a **real recommender**:
+- Start with V2.1 (decoupled negatives) — quickest win, fixes the obvious bug.
+- Add V2.2 (bias correction) if popularity skew is bad.
+- Invest in V2.3 (hard-negative mining) only after the dataset is real and large enough to support it. Synthetic data + hard negatives = wasted effort.
