@@ -80,13 +80,20 @@ python -m src.serving.add_user --interests "AI Infrastructure" \
 python -m src.serving.add_item --category Travel \
     --title "A weekend in Porto" --body "Cheap flights, walkable streets..."
 
-# 8. launch the Streamlit demo
-streamlit run app/streamlit_app.py
-# Then open http://localhost:8501 — four pages in the sidebar:
+# 8. launch the Streamlit demo (use the wrapper — see Notes below)
+./scripts/run_app.sh
+# Then open http://localhost:8501 — five pages in the sidebar:
 #   1. Recommendations          — pick a user, click items, watch recs adapt
-#   2. Add new item             — Phase 6 cold-start with verification
-#   3. User state debugger      — long_term vs adaptive side-by-side
-#   4. Evaluation               — Phase 8 placeholder
+#   2. Item explorer            — browse the catalog by category, click to feed session
+#   3. Add new item             — Phase 6 cold-start with verification
+#   4. User state debugger      — long_term vs adaptive side-by-side
+#   5. Evaluation               — Phase 8 placeholder
+
+# NOTE for macOS Apple Silicon users: launch via ./scripts/run_app.sh, NOT
+# `streamlit run app/streamlit_app.py` directly. The wrapper exports
+# OMP_NUM_THREADS=1 + KMP_DUPLICATE_LIB_OK=TRUE BEFORE python starts, which
+# sidesteps a pthread_mutex_init segfault that otherwise hits when the
+# faiss-cpu and torch libomp instances coexist in the same process.
 ```
 
 ---

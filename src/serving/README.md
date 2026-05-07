@@ -407,10 +407,23 @@ Run via the per-file isolation script (see Notes below):
 
 # Notes on the macOS faiss + torch combo
 
-faiss-cpu and PyTorch each ship their own libomp. On macOS Apple Silicon, having both loaded into a long-lived process can intermittently segfault `faiss.search` after PyTorch has loaded a state dict. Mitigations applied:
+faiss-cpu and PyTorch each ship their own libomp. On macOS Apple Silicon, having both loaded into a long-lived process produces two distinct failure modes:
 
-- `KMP_DUPLICATE_LIB_OK=TRUE` set in `cold_start.py` and `recommender.py` at import time.
-- `tests/test_phase6.py` imports `torch` BEFORE the Recommender (forces torch's libomp to load first).
-- `scripts/test.sh` runs each test file in its own pytest invocation (separate processes), so test_indexing.py never has torch loaded into its process and test_phase6.py is the only file where both libraries coexist.
+| Symptom | Trigger | Fix |
+|---|---|---|
+| `Fatal Python error: Segmentation fault` inside `torch.load_state_dict` | First cold-start tower call after faiss is already loaded | Import torch BEFORE faiss (see `tests/test_phase6.py`); set `KMP_DUPLICATE_LIB_OK=TRUE` |
+| `OMP: Error #179: Function pthread_mutex_init failed: System error #22` then segfault | Streamlit worker thread spinning up after the Recommender has loaded | `OMP_NUM_THREADS=1` + `MKL_NUM_THREADS=1` + `KMP_INIT_AT_FORK=FALSE`, **set before python starts** |
+| `Fatal Python error: Segmentation fault` inside `faiss.search` | Long-running pytest session that bounces between test files | Per-file pytest isolation via `scripts/test.sh` |
 
-When deploying to Streamlit Cloud (Phase 7), this isn't a concern — Streamlit's process loads everything once at startup, and the import-order fix in `tests/test_phase6.py` is mirrored in `app/streamlit_app.py`.
+**Reliable launchers:**
+
+- **For tests:** `./scripts/test.sh` — each test file in its own pytest process.
+- **For the Streamlit app:** `./scripts/run_app.sh` — exports the OMP env vars BEFORE python starts, then `exec`s `streamlit run app/streamlit_app.py`. Don't run `streamlit run` directly.
+
+The same env vars are also set inside `cold_start.py` and `recommender.py` via `os.environ.setdefault(...)`, but that's a fallback — it only fires if Streamlit hasn't already imported any libomp-using extension before the Recommender module loads. The wrapper script is the only fully-reliable approach.
+
+When deploying to Streamlit Cloud, the easiest path is a one-line `setup.sh`:
+```bash
+echo "export OMP_NUM_THREADS=1" >> /home/appuser/venv/bin/activate
+```
+or set the env vars in the Streamlit Cloud "Advanced settings → Environment variables" panel.

@@ -36,14 +36,18 @@ from __future__ import annotations
 
 import os
 # Set BEFORE importing torch or faiss. faiss-cpu and torch each ship their
-# own libomp; on macOS Apple Silicon a duplicate-libomp load segfaults
-# load_state_dict unless this is set.
+# own libomp; on macOS Apple Silicon a duplicate-libomp load can either
+# (a) segfault load_state_dict, or (b) fail pthread_mutex_init in the
+# Streamlit worker threads ("OMP: Error #179"). The first is fixed by
+# KMP_DUPLICATE_LIB_OK + import order; the second by single-threaded OMP.
 #
-# Note: this Recommender does NOT eagerly import torch. Cold-start
-# (`add_user`/`add_item`) does that lazily inside `cold_start.py`. Callers
-# that intend to use cold-start AND faiss in the same process must ensure
-# torch is imported BEFORE faiss — see tests/test_phase6.py for the pattern.
+# Reliable fix: launch via `scripts/run_app.sh` (or run tests via
+# `scripts/test.sh`) which exports these BEFORE python starts. The
+# setdefault calls here are best-effort fallbacks.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("KMP_INIT_AT_FORK", "FALSE")
 
 import argparse
 import json
