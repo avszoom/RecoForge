@@ -1,0 +1,111 @@
+{
+  "seed": 42,
+  "device": "mps",
+  "trained_at": "2026-05-07T16:25:52.873663+00:00",
+  "hyperparams": {
+    "epochs": 10,
+    "batch_size": 128,
+    "lr": 0.001,
+    "unk_dropout": 0.01
+  },
+  "config": {
+    "num_users": 1000,
+    "num_items": 4000,
+    "num_categories": 12,
+    "num_activity_levels": 3,
+    "text_dim": 384,
+    "id_emb_dim": 32,
+    "category_emb_dim": 16,
+    "activity_emb_dim": 8,
+    "output_dim": 64,
+    "user_hidden": 128,
+    "item_hidden": 256,
+    "dropout": 0.1,
+    "init_logit_scale": 2.302585092994046
+  },
+  "history": [
+    {
+      "loss": 4.189441910766592,
+      "mean_diag_cos": 0.38973781137466135,
+      "mean_offdiag_cos": 0.24043496670252337,
+      "epoch": 1,
+      "seconds": 2.65,
+      "logit_scale": 9.104
+    },
+    {
+      "loss": 4.0040906722415555,
+      "mean_diag_cos": 0.6018829166770693,
+      "mean_offdiag_cos": 0.4047727650605423,
+      "epoch": 2,
+      "seconds": 2.48,
+      "logit_scale": 8.711
+    },
+    {
+      "loss": 3.973166872641829,
+      "mean_diag_cos": 0.6134038904078201,
+      "mean_offdiag_cos": 0.40298023221506984,
+      "epoch": 3,
+      "seconds": 2.5,
+      "logit_scale": 8.459
+    },
+    {
+      "loss": 3.9438169237563003,
+      "mean_diag_cos": 0.6088188396059495,
+      "mean_offdiag_cos": 0.3867191638553119,
+      "epoch": 4,
+      "seconds": 2.48,
+      "logit_scale": 8.331
+    },
+    {
+      "loss": 3.924620890362048,
+      "mean_diag_cos": 0.6039359227089475,
+      "mean_offdiag_cos": 0.37421783319050467,
+      "epoch": 5,
+      "seconds": 2.51,
+      "logit_scale": 8.241
+    },
+    {
+      "loss": 3.9002265097377102,
+      "mean_diag_cos": 0.5974622220689686,
+      "mean_offdiag_cos": 0.360569062455748,
+      "epoch": 6,
+      "seconds": 2.49,
+      "logit_scale": 8.213
+    },
+    {
+      "loss": 3.883336396751356,
+      "mean_diag_cos": 0.5734352452854513,
+      "mean_offdiag_cos": 0.3314822250995674,
+      "epoch": 7,
+      "seconds": 2.5,
+      "logit_scale": 8.179
+    },
+    {
+      "loss": 3.8627536685347312,
+      "mean_diag_cos": 0.5541959186908502,
+      "mean_offdiag_cos": 0.3083918178176311,
+      "epoch": 8,
+      "seconds": 2.49,
+      "logit_scale": 8.188
+    },
+    {
+      "loss": 3.8354242946715003,
+      "mean_diag_cos": 0.524880843833237,
+      "mean_offdiag_cos": 0.2749046588216577,
+      "epoch": 9,
+      "seconds": 2.51,
+      "logit_scale": 8.219
+    },
+    {
+      "loss": 3.8078051073180075,
+      "mean_diag_cos": 0.5083337215851126,
+      "mean_offdiag_cos": 0.2548592786487955,
+      "epoch": 10,
+      "seconds": 2.66,
+      "logit_scale": 8.307
+    }
+  ],
+  "final_loss": 3.8078051073180075,
+  "params": 303833,
+  "total_seconds": 25.24
+}

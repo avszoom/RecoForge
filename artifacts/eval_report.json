@@ -1,0 +1,49 @@
+{
+  "n_eval_interactions": 19681,
+  "k_values": [
+    5,
+    10
+  ],
+  "results": {
+    "popularity": {
+      "n_eval_pairs": 19681.0,
+      "recall@5": 0.01098,
+      "mrr@5": 0.0054,
+      "ndcg@5": 0.00676,
+      "recall@10": 0.0219,
+      "mrr@10": 0.00681,
+      "ndcg@10": 0.01024,
+      "seconds": 0.04
+    },
+    "category": {
+      "n_eval_pairs": 19681.0,
+      "recall@5": 0.06519,
+      "mrr@5": 0.0287,
+      "ndcg@5": 0.03764,
+      "recall@10": 0.12825,
+      "mrr@10": 0.03694,
+      "ndcg@10": 0.05785,
+      "seconds": 0.09
+    },
+    "two_tower_long_term": {
+      "n_eval_pairs": 19681.0,
+      "recall@5": 0.00605,
+      "mrr@5": 0.00284,
+      "ndcg@5": 0.00362,
+      "recall@10": 0.01179,
+      "mrr@10": 0.00358,
+      "ndcg@10": 0.00545,
+      "seconds": 1.13
+    },
+    "two_tower_adaptive": {
+      "n_eval_pairs": 19681.0,
+      "recall@5": 0.00894,
+      "mrr@5": 0.00436,
+      "ndcg@5": 0.00548,
+      "recall@10": 0.02347,
+      "mrr@10": 0.00612,
+      "ndcg@10": 0.01,
+      "seconds": 10.74
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "config": {
+    "eval_days": 7,
+    "event_type_distribution": {
+      "click": 0.35,
+      "like": 0.12,
+      "save": 0.05,
+      "share": 0.03,
+      "view": 0.45
+    },
+    "history_days": 30,
+    "source_mix": {
+      "preferred": 0.7,
+      "random": 0.1,
+      "related": 0.2
+    }
+  },
+  "files": {
+    "interactions.jsonl": 64437,
+    "interactions_eval.jsonl": 19681,
+    "items.jsonl": 4000,
+    "users.jsonl": 1000
+  },
+  "generated_at": "2026-05-07T16:09:32.311718+00:00",
+  "report": {
+    "activity_distribution": {
+      "high": 200,
+      "low": 397,
+      "medium": 403
+    },
+    "eval_interactions": 19681,
+    "event_type_distribution": {
+      "click": 22492,
+      "like": 7764,
+      "save": 3225,
+      "share": 1940,
+      "view": 29016
+    },
+    "items": 4000,
+    "items_per_category": {
+      "AI Infrastructure": 367,
+      "Food": 330,
+      "Gaming": 305,
+      "Health & Fitness": 324,
+      "Investing": 314,
+      "Movies & TV": 336,
+      "Music": 331,
+      "Personal Finance": 335,
+      "Programming": 378,
+      "Science": 329,
+      "Startups": 345,
+      "Travel": 306
+    },
+    "preferred_category_hit_rate": 0.7169,
+    "train_interactions": 64437,
+    "user_interest_distribution": {
+      "AI Infrastructure": 142,
+      "Food": 157,
+      "Gaming": 154,
+      "Health & Fitness": 173,
+      "Investing": 160,
+      "Movies & TV": 183,
+      "Music": 156,
+      "Personal Finance": 150,
+      "Programming": 147,
+      "Science": 159,
+      "Startups": 170,
+      "Travel": 158
+    },
+    "users": 1000
+  },
+  "seed": 42
+}
