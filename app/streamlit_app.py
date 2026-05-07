@@ -73,6 +73,68 @@ def _required_artifacts_present() -> tuple[bool, list[str]]:
     return (not missing), missing
 
 
+def _maybe_bootstrap() -> None:
+    """Auto-run the dataset/train/index pipeline if artifacts are missing.
+
+    Triggered on Streamlit Cloud cold starts where the gitignored artifacts/
+    directory is empty. ~1 minute one-time cost; subsequent reruns return
+    immediately because all artifacts are present.
+    """
+    ok, missing = _required_artifacts_present()
+    if ok:
+        return
+
+    st.info(
+        "**First-deploy bootstrap** — generating dataset + training the two-tower "
+        "+ building the FAISS index. ~1 minute on a Streamlit Cloud free tier; "
+        "subsequent app launches reuse the cached artifacts (instant)."
+    )
+    st.caption(f"Missing {len(missing)} required file(s).")
+
+    import subprocess
+    import sys
+    import time as _time
+
+    # Inherit + augment env so subprocess pipeline gets the same OMP fixes
+    # as the parent process.
+    bootstrap_env = dict(os.environ)
+    bootstrap_env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    bootstrap_env.setdefault("OMP_NUM_THREADS", "1")
+    bootstrap_env.setdefault("MKL_NUM_THREADS", "1")
+    bootstrap_env.setdefault("KMP_INIT_AT_FORK", "FALSE")
+
+    py = sys.executable
+    steps = [
+        ("Generate synthetic dataset",     [py, "-m", "src.data.generate_dataset"]),
+        ("Cache MiniLM text features",     [py, "-m", "src.models.text_features"]),
+        ("Train two-tower model (~25s)",   [py, "-m", "src.models.train_two_tower"]),
+        ("Export user/item embeddings",    [py, "-m", "src.models.export_embeddings"]),
+        ("Build FAISS index",              [py, "-m", "src.indexing.build_faiss"]),
+    ]
+
+    with st.status("Running bootstrap…", expanded=True) as status:
+        for label, cmd in steps:
+            status.write(f"▶ {label}")
+            t0 = _time.perf_counter()
+            result = subprocess.run(
+                cmd, cwd=str(ROOT), env=bootstrap_env,
+                capture_output=True, text=True,
+            )
+            elapsed = _time.perf_counter() - t0
+            if result.returncode != 0:
+                status.update(label=f"FAILED: {label}", state="error", expanded=True)
+                st.error(f"Bootstrap step `{label}` failed.")
+                stderr_tail = (result.stderr or result.stdout or "").splitlines()[-40:]
+                st.code("\n".join(stderr_tail), language="text")
+                st.stop()
+            status.write(f"  ✓ {label}  ({elapsed:.1f}s)")
+        status.update(label="✓ Bootstrap complete", state="complete", expanded=False)
+
+    st.success("Setup complete — reloading the app.")
+    _time.sleep(0.5)
+    st.rerun()
+
+
 @st.cache_resource(show_spinner="Loading recommender (first call only — ~1s)…")
 def get_recommender() -> Recommender:
     return Recommender(ARTIFACTS, DATA)
@@ -722,18 +784,18 @@ def main() -> None:
     st.sidebar.title("⚡ RecoForge")
     st.sidebar.caption("Real-time recommendation POC")
 
+    # Auto-runs on Streamlit Cloud cold start where artifacts/ is empty.
+    _maybe_bootstrap()
+
     ok, missing = _required_artifacts_present()
     if not ok:
-        st.error("Required artifacts are missing.")
+        # Fallback message in case bootstrap was skipped or partially failed.
+        st.error("Required artifacts are still missing after bootstrap.")
         st.code("\n".join(missing), language=None)
         st.markdown(
-            "Run the pipeline first:\n\n"
+            "Run the pipeline manually:\n\n"
             "```bash\n"
-            "python -m src.data.generate_dataset\n"
-            "python -m src.models.text_features\n"
-            "python -m src.models.train_two_tower\n"
-            "python -m src.models.export_embeddings\n"
-            "python -m src.indexing.build_faiss\n"
+            "./scripts/bootstrap.sh\n"
             "```"
         )
         st.stop()
