@@ -42,14 +42,18 @@ def _cosine_to_unit(score: float) -> float:
 # ─── generators ──────────────────────────────────────────────────────────
 
 
-def ann_long_term(rec: "Recommender", user_id: str, k: int = 50) -> list[Candidate]:
+def ann_long_term(
+    rec: "Recommender", user_id: str,
+    k: int = 50, *,
+    blend: tuple[float, float] | None = None,
+) -> list[Candidate]:
     """Top-k from FAISS using the (blended) user embedding.
 
     This is the workhorse — most candidates come from here. Uses
     `final_user_embedding`, which already incorporates the session blend
-    when the user has recent clicks.
+    when the user has recent clicks. `blend` overrides the auto schedule.
     """
-    user_emb = rec.final_user_embedding(user_id)
+    user_emb = rec.final_user_embedding(user_id, blend=blend)
     hits = rec.index.search(user_emb, k=k)[0]
     return [Candidate(iid, "ann", _cosine_to_unit(score)) for iid, score in hits]
 
@@ -147,10 +151,13 @@ def category_interest(rec: "Recommender", user_id: str, k: int = 30) -> list[Can
 # ─── one-call orchestrator ───────────────────────────────────────────────
 
 
-def generate_all(rec: "Recommender", user_id: str) -> list[list[Candidate]]:
-    """Run every generator. Returns a list-of-lists for the ranker to merge."""
+def generate_all(
+    rec: "Recommender", user_id: str, *,
+    blend: tuple[float, float] | None = None,
+) -> list[list[Candidate]]:
+    """Run every generator. `blend` overrides the auto blend schedule for ann_long_term."""
     return [
-        ann_long_term(rec, user_id, k=50),
+        ann_long_term(rec, user_id, k=50, blend=blend),
         similar_to_recent(rec, user_id),
         trending(rec, k=30),
         fresh(rec, k=30),

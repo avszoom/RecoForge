@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.constants import ACTIVITY_LEVELS, AGE_BUCKETS, CATEGORIES, LOCATIONS
-from src.serving.recommender import Recommendation, Recommender
+from src.serving.recommender import Recommendation, Recommender, auto_blend_weights
 
 
 ARTIFACTS = ROOT / "artifacts"
@@ -172,6 +172,34 @@ def page_recommendations(rec: Recommender) -> None:
         )
         k = st.slider("k", min_value=5, max_value=20, value=10, step=1)
 
+        # ── Blend control (advanced) ─────────────────────────────────────
+        st.subheader("Blend")
+        n_history = len(rec.seen_items(st.session_state.current_uid))
+        state_now = rec.user_state.get(st.session_state.current_uid)
+        n_session = len(state_now.recent_clicked_items) if state_now else 0
+        auto_long, auto_session = auto_blend_weights(n_session, n_history)
+
+        use_auto = st.toggle(
+            "Auto blend",
+            value=True,
+            help="Cold-start aware: established users (>=5 logged interactions) always anchor on long-term at 70%.",
+            key="blend_auto",
+        )
+        if use_auto:
+            st.caption(
+                f"Auto: **{auto_long:.0%}** long-term + **{auto_session:.0%}** session  "
+                f"(history={n_history}, session_clicks={n_session})"
+            )
+            blend_override: tuple[float, float] | None = None
+        else:
+            long_w = st.slider(
+                "Long-term weight", min_value=0.0, max_value=1.0,
+                value=float(auto_long), step=0.05,
+                help="Session weight = 1 − long-term weight",
+            )
+            blend_override = (long_w, 1.0 - long_w)
+            st.caption(f"Manual: **{long_w:.0%}** long-term + **{1.0 - long_w:.0%}** session")
+
         st.divider()
         with st.expander("➕ Sign up a new user (cold start)"):
             with st.form("signup_form", clear_on_submit=True):
@@ -203,7 +231,7 @@ def page_recommendations(rec: Recommender) -> None:
 
     profile = rec.user_profile(user_id) or {}
     user_interests = set(profile.get("interests", []))
-    recs = rec.recommend(user_id, k=k, mode=mode)
+    recs = rec.recommend(user_id, k=k, mode=mode, blend=blend_override)
 
     n_match = sum(1 for r in recs if r.category in user_interests)
     st.markdown(
@@ -372,7 +400,96 @@ def page_debugger(rec: Recommender) -> None:
         )
 
 
-# ─── page 4 — Evaluation (stub) ──────────────────────────────────────────
+# ─── page 4 — Item explorer ──────────────────────────────────────────────
+
+
+def page_explorer(rec: Recommender) -> None:
+    st.header("Item explorer")
+    st.caption(
+        "Browse the catalog by category. Clicks here feed the same session state "
+        "as the Recommendations page — useful for testing how recs respond to "
+        "specific category patterns (e.g. \"click 3 Travel items, then 2 Food, then check the Recommendations page\")."
+    )
+
+    user_ids = sorted(rec.user_id_to_row.keys())
+    if "current_uid" not in st.session_state:
+        st.session_state.current_uid = user_ids[0]
+    user_id = st.session_state.current_uid
+
+    profile = rec.user_profile(user_id) or {}
+    user_interests = set(profile.get("interests", []))
+
+    # ── header ──────────────────────────────────────────────────────────
+    col_a, col_b, col_c = st.columns([3, 2, 1])
+    with col_a:
+        st.markdown(f"**Active user:** `{user_id}`  ·  interests: {', '.join(profile.get('interests', [])) or '(none)'}")
+    with col_b:
+        state = rec.user_state.get(user_id)
+        n_session = len(state.recent_clicked_items) if state else 0
+        cats = state.recent_categories.most_common(3) if state else []
+        cats_str = ", ".join(f"{k}×{v}" for k, v in cats) or "—"
+        st.caption(f"session: {n_session} clicks  ·  recent: {cats_str}")
+    with col_c:
+        if st.button("↻ Reset session", key="explorer_reset", use_container_width=True):
+            rec.user_state.reset(user_id)
+            rec.user_state.save()
+            st.rerun()
+
+    st.divider()
+
+    # ── controls ────────────────────────────────────────────────────────
+    cat_options = sorted(rec.items_by_category.keys())
+    col_cat, col_sort, col_n = st.columns([2, 2, 1])
+    with col_cat:
+        category = st.selectbox("Category", cat_options, key="explorer_cat")
+    with col_sort:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["popularity (desc)", "newest first", "oldest first", "title A→Z"],
+            key="explorer_sort",
+        )
+    with col_n:
+        n_show = st.slider("show", min_value=10, max_value=50, value=20, step=10, key="explorer_n")
+
+    items = list(rec.items_by_category.get(category, []))
+    if sort_by == "popularity (desc)":
+        items.sort(key=lambda it: it["popularity_score"], reverse=True)
+    elif sort_by == "newest first":
+        items.sort(key=lambda it: it["created_at"], reverse=True)
+    elif sort_by == "oldest first":
+        items.sort(key=lambda it: it["created_at"])
+    elif sort_by == "title A→Z":
+        items.sort(key=lambda it: it["title"].lower())
+    items = items[:n_show]
+
+    seen = rec.seen_items(user_id)
+    in_interest = category in user_interests
+    flag = "★ in declared interests" if in_interest else "(not in declared interests — use to test the system!)"
+    st.markdown(f"### {category} · {len(items)} items · {flag}")
+
+    for item in items:
+        c = st.container(border=True)
+        cols = c.columns([8, 2, 1])
+        with cols[0]:
+            already_seen = " ✓ seen" if item["item_id"] in seen else ""
+            cols[0].markdown(f"**{item['title']}**{already_seen}")
+            cols[0].caption(f"_{item['body'][:160]}{'…' if len(item['body']) > 160 else ''}_")
+            meta = (
+                f":green-background[{item['category']}] "
+                f":gray-background[{item.get('topic', '')}] "
+                f"· popularity {item['popularity_score']:.2f} · created {item['created_at'][:10]}"
+            )
+            cols[0].markdown(meta)
+        with cols[1]:
+            cols[1].metric("popularity", f"{item['popularity_score']:.3f}")
+        with cols[2]:
+            if cols[2].button("👍", key=f"explorer_click_{item['item_id']}", help="Click this item"):
+                rec.on_click(user_id, item["item_id"])
+                st.toast(f"Clicked {item['item_id']}", icon="✅")
+                st.rerun()
+
+
+# ─── page 5 — Evaluation (stub) ──────────────────────────────────────────
 
 
 def page_evaluation() -> None:
@@ -396,6 +513,7 @@ def page_evaluation() -> None:
 
 PAGES = {
     "🎯 Recommendations":      page_recommendations,
+    "🛒 Item explorer":        page_explorer,
     "➕ Add new item":          page_add_item,
     "🔬 User state debugger":  page_debugger,
     "📊 Evaluation":           page_evaluation,

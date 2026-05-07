@@ -143,13 +143,20 @@ The user embedding fed into `ann_long_term` is not the static long-term vector �
 session_emb = mean(item_embeddings[recent_clicks])    # rebuilt per request
 session_emb = session_emb / ||session_emb||
 
-n_clicks  →  (long_term_weight, session_weight)
-   < 3    →  (0.3, 0.7)        ← cold-start: trust session more
-  3..9    →  (0.5, 0.5)
-  ≥ 10    →  (0.7, 0.3)        ← established user: anchor on long-term
+# auto_blend_weights(n_session, n_history) — cold-start aware
+if n_history < 5:                                # cold-start user (signed up via add_user)
+    n_session < 3   → (0.3, 0.7)                 # rely on first clicks heavily
+    n_session < 10  → (0.5, 0.5)
+    else            → (0.7, 0.3)
+else:                                            # established user (in trained model)
+    always          → (0.7, 0.3)                 # anchor on long-term
 
 final_user_emb = (w_long * long_term + w_session * session_emb).normalize()
 ```
+
+**Why gate the aggressive schedule on `n_history`:** for established users — the common case in the synthetic dataset, where everyone has 50–200 logged interactions — a single off-pattern click shouldn't redirect their whole feed. The session-heavy schedule is reserved for cold-start users whose long-term embedding is a synthesized `<UNK>` fallback.
+
+**Manual override:** `recommend(..., blend=(0.6, 0.4))` overrides the schedule. The Streamlit Recommendations page exposes this as a "Long-term weight" slider in the sidebar (toggle off "Auto blend" to manually drag the weight).
 
 ## Linear ranker
 

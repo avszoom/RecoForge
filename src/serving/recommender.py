@@ -95,12 +95,27 @@ class Recommendation:
 
 Mode = Literal["adaptive", "long_term"]
 
-# Session-blend weights as a function of the user's recent-click count.
-# (long_term_weight, session_weight)
-def _blend_weights(n_clicks: int) -> tuple[float, float]:
-    if n_clicks < 3:    return (0.3, 0.7)        # cold-start: trust session more
-    if n_clicks < 10:   return (0.5, 0.5)
-    return (0.7, 0.3)                            # established: anchor on long-term
+# Below this many historical interactions a user is treated as "cold start" —
+# their long-term embedding is either an <UNK>-row fallback or barely-trained,
+# so we lean on the session signal heavily. Above it, the long-term embedding
+# is a real, properly-trained representation and we anchor on it.
+COLD_START_HISTORY_THRESHOLD: int = 5
+
+
+def auto_blend_weights(n_session: int, n_history: int) -> tuple[float, float]:
+    """Decide (long_term_weight, session_weight) for the user-embedding blend.
+
+    For users in the trained model with substantial history (the common case
+    in our synthetic dataset), always anchor on long-term: a single off-pattern
+    click shouldn't redirect the user's whole feed. The aggressive
+    session-heavy schedule fires only for cold-start users whose long-term
+    embedding is a synthesized fallback (no real training signal).
+    """
+    if n_history < COLD_START_HISTORY_THRESHOLD:                # cold-start user
+        if n_session < 3:    return (0.3, 0.7)
+        if n_session < 10:   return (0.5, 0.5)
+        return (0.7, 0.3)
+    return (0.7, 0.3)                                           # established user
 
 
 class Recommender:
@@ -237,17 +252,31 @@ class Recommender:
         state.session_embedding = avg
         return avg
 
-    def final_user_embedding(self, user_id: str) -> np.ndarray:
-        """Blend long-term and session embeddings per the dynamic weight schedule."""
+    def final_user_embedding(
+        self, user_id: str, *, blend: tuple[float, float] | None = None,
+    ) -> np.ndarray:
+        """Blend long-term and session embeddings.
+
+        If `blend` is provided, those weights override the auto schedule —
+        useful for the Streamlit slider and for A/B testing. If None, the
+        weights come from `auto_blend_weights(n_session, n_history)` which
+        is cold-start-aware: established users always anchor on long-term,
+        cold-start users (<5 historical interactions) lean on the session.
+        """
         long_term = self.long_term_embedding(user_id)
         state = self.user_state.get_or_create(user_id)
         session = self._compute_session_embedding(state)
         if session is None:
             return long_term
-        w_long, w_session = _blend_weights(len(state.recent_clicked_items))
-        blend = w_long * long_term + w_session * session
-        n = float(np.linalg.norm(blend))
-        return (blend / n).astype(np.float32) if n > 1e-9 else long_term
+        if blend is not None:
+            w_long, w_session = blend
+        else:
+            n_session = len(state.recent_clicked_items)
+            n_history = len(self.user_history.get(user_id, set()))
+            w_long, w_session = auto_blend_weights(n_session, n_history)
+        blended = w_long * long_term + w_session * session
+        n = float(np.linalg.norm(blended))
+        return (blended / n).astype(np.float32) if n > 1e-9 else long_term
 
     # ── online click ─────────────────────────────────────────────────────
 
@@ -441,11 +470,12 @@ class Recommender:
         *,
         mode: Mode = "adaptive",
         filter_seen: bool = True,
+        blend: tuple[float, float] | None = None,
     ) -> list[Recommendation]:
         if mode == "long_term":
             return self._recommend_long_term(user_id, k=k, filter_seen=filter_seen)
         if mode == "adaptive":
-            return self._recommend_adaptive(user_id, k=k, filter_seen=filter_seen)
+            return self._recommend_adaptive(user_id, k=k, filter_seen=filter_seen, blend=blend)
         raise ValueError(f"unknown mode: {mode!r}")
 
     def _recommend_long_term(self, user_id: str, k: int, *, filter_seen: bool) -> list[Recommendation]:
@@ -468,9 +498,13 @@ class Recommender:
             r.rank = i
         return recs
 
-    def _recommend_adaptive(self, user_id: str, k: int, *, filter_seen: bool) -> list[Recommendation]:
-        # 1. Generate candidates from all 5 sources.
-        candidates_per_source = generate_all(self, user_id)
+    def _recommend_adaptive(
+        self, user_id: str, k: int, *,
+        filter_seen: bool,
+        blend: tuple[float, float] | None = None,
+    ) -> list[Recommendation]:
+        # 1. Generate candidates from all 5 sources (blend threads into ann_long_term).
+        candidates_per_source = generate_all(self, user_id, blend=blend)
 
         # 2. Merge dedupe.
         merged = merge(candidates_per_source)
