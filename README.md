@@ -134,7 +134,7 @@ recommendationForge/
 - [x] **Phase 0** — Scaffold + requirements
 - [x] **Phase 1** — Synthetic dataset generator (`src/data/`)
 - [x] **Phase 2** — Two-tower model + training (`src/models/`) — see [Known limitations](src/models/README.md#known-limitations-v1)
-- [ ] **Phase 3** — FAISS item index (`src/indexing/`)
+- [x] **Phase 3** — FAISS item index (`src/indexing/`)
 - [ ] **Phase 4** — Long-term-only recommender (`src/serving/recommender.py`)
 - [ ] **Phase 5** — Online session adaptation + candidate generators
 - [ ] **Phase 6** — Add new user / new item flows (cold start)
