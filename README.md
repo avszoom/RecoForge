@@ -167,7 +167,18 @@ recommendationForge/
 - [x] **Phase 5** — Online session adaptation + candidate generators
 - [x] **Phase 6** — Add new user / new item flows (cold start)
 - [x] **Phase 7** — Streamlit UI (4 pages)
-- [ ] **Phase 8** — Evaluation suite + baseline comparison
+- [x] **Phase 8** — Evaluation suite + baseline comparison
+
+### Phase 8 results (full 19,681-interaction eval split)
+
+|                          | recall@10 | mrr@10 | ndcg@10 |
+|---|---:|---:|---:|
+| popularity               | 0.0219    | 0.0068 | 0.0102  |
+| category (declared interests + popularity) | 0.1283 | 0.0369 | 0.0578  |
+| two_tower (long_term)    | 0.0118    | 0.0036 | 0.0054  |
+| **two_tower + session-replay** | **0.0235** | 0.0061 | 0.0100  |
+
+The headline finding: **session blending ~doubles recall@10 over long-term-only** (0.0118 → 0.0235), validating the Phase 5 design. The category baseline beats the two-tower on raw recall — its candidate pool is much smaller (~300-600 items vs the full 4000) so high popularity items dominate. Within-category discrimination is the open weakness (see [`src/models/README.md` known-limitations](src/models/README.md#known-limitations-v1)). Absolute numbers will rise to 8-15% with real (non-templated) text + V2 negative sampling.
 
 ---
 

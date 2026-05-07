@@ -626,19 +626,85 @@ def page_explorer(rec: Recommender) -> None:
 
 
 def page_evaluation() -> None:
-    st.header("Evaluation")
-    st.info(
-        "Phase 8 — to be implemented. This page will render `artifacts/eval_report.json` "
-        "produced by `python -m src.evaluation.evaluate`. "
-        "Planned baselines: popularity, category, two-tower, two-tower + session."
+    import json
+    import pandas as pd
+
+    st.header("📊 Evaluation")
+    report_path = ROOT / "artifacts" / "eval_report.json"
+    if not report_path.exists():
+        st.warning("`artifacts/eval_report.json` not found.")
+        st.markdown(
+            "Run the evaluation first:\n\n"
+            "```bash\n"
+            "python -m src.evaluation.evaluate\n"
+            "```\n\n"
+            "It runs 4 strategies (popularity, category, two-tower long-term, "
+            "two-tower + session-replay) over the held-out 7-day eval split and "
+            "writes the report this page reads."
+        )
+        return
+
+    with report_path.open("r", encoding="utf-8") as f:
+        report = json.load(f)
+
+    st.caption(
+        f"Evaluated **{report['n_eval_interactions']:,}** held-out interactions  "
+        f"·  k values: {report['k_values']}"
     )
+
+    # Build a comparison dataframe with one row per strategy.
+    rows = []
+    for strategy, r in report["results"].items():
+        row = {"strategy": strategy}
+        for k in report["k_values"]:
+            row[f"recall@{k}"] = r.get(f"recall@{k}", 0.0)
+            row[f"mrr@{k}"] = r.get(f"mrr@{k}", 0.0)
+            row[f"ndcg@{k}"] = r.get(f"ndcg@{k}", 0.0)
+        row["seconds"] = r.get("seconds", 0.0)
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    st.markdown("### Comparison table")
+    # Highlight the best value per metric column (excluding the `strategy` and `seconds` columns).
+    metric_cols = [c for c in df.columns if c not in ("strategy", "seconds")]
+    styled = df.style.format({c: "{:.4f}" for c in metric_cols} | {"seconds": "{:.2f}"})
+    styled = styled.highlight_max(subset=metric_cols, color="lightgreen")
+    st.dataframe(styled, hide_index=True, use_container_width=True)
+
+    st.markdown("### Reading the table")
     st.markdown(
-        "**Planned metrics**\n"
-        "- Recall@10\n"
-        "- Precision@10\n"
-        "- MRR\n"
-        "- NDCG@10\n"
+        "- **Recall@k** — fraction of held-out items found in the top-k. "
+        "Higher = system surfaces real engagements more often.\n"
+        "- **MRR@k** — mean reciprocal rank, capped at k. Hit at rank 1 → 1.0, "
+        "rank 2 → 0.5, rank 5 → 0.2. Higher = right answers ranked closer to top.\n"
+        "- **NDCG@k** — log-discounted version of MRR. Industry standard for ranking quality.\n\n"
+        "**Best per column** is highlighted green. The story we want to see "
+        "is `two_tower_adaptive` ≥ `two_tower_long_term` (session blending helps) "
+        "and both ≥ `popularity` (personalization beats global hot items). "
+        "Whether `two_tower_*` beats `category` depends on the dataset — for "
+        "templated-text synthetic data, the category baseline's tight candidate "
+        "pool is hard to beat on raw recall."
     )
+
+    # Caveat from src/models/README.md (Known limitations)
+    with st.expander("Why are the absolute numbers low?"):
+        st.markdown(
+            "Two reasons, both Phase 2 known limitations (see `src/models/README.md`):\n"
+            "1. **Templated text** — items in the same category share most words, "
+            "so MiniLM places them near each other. The model can route to the right "
+            "category but struggles to pick the *exact* item within it.\n"
+            "2. **In-batch sampled softmax false-negatives** — when two users in a "
+            "training batch both like Travel, the loss penalizes the model for "
+            "ranking the other user's Travel item high, even though A would also "
+            "like it. The training signal contradicts itself within categories.\n\n"
+            "With real (non-templated) text + decoupled negative sampling (V2 fixes), "
+            "absolute recall@10 typically jumps to 8–15%. The **ordering** between "
+            "rows in the table above is the meaningful signal regardless."
+        )
+
+    # Per-strategy raw JSON (collapsible)
+    with st.expander("Raw report (JSON)"):
+        st.code(json.dumps(report, indent=2), language="json")
 
 
 # ─── routing ─────────────────────────────────────────────────────────────
