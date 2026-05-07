@@ -126,11 +126,13 @@ def _user_profile_card(rec: Recommender, user_id: str) -> None:
 
 def _render_recommendation(
     rec: Recommender, user_id: str, r: Recommendation, user_interests: set[str],
-    *, with_breakdown: bool = False,
+    *, with_breakdown: bool = False, is_new: bool = False,
 ) -> None:
     """Render a single Recommendation card with a click button.
 
-    If `with_breakdown=True`, attaches a per-source score-decomposition expander.
+    `is_new=True` adds a 🆕 badge — used to highlight items that weren't in
+    the previous top-K, making the post-click reshuffle visible.
+    `with_breakdown=True` attaches a per-source score-decomposition expander.
     """
     from src.serving.ranker import RANK_WEIGHTS
 
@@ -138,8 +140,9 @@ def _render_recommendation(
     cols = container.columns([8, 2, 1])
     with cols[0]:
         match_marker = "★ " if r.category in user_interests else ""
+        new_marker = "🆕 " if is_new else ""
         container_md = (
-            f"**{r.rank}.** {match_marker}{r.title}\n\n"
+            f"**{r.rank}.** {new_marker}{match_marker}{r.title}\n\n"
             f":green-background[{r.category}] {_source_badges(r.sources)}\n\n"
             f"_{r.body[:160]}{'…' if len(r.body) > 160 else ''}_"
         )
@@ -271,6 +274,16 @@ def page_recommendations(rec: Recommender) -> None:
     recs = rec.recommend(user_id, k=k, mode=mode, blend=blend_override)
     n_match = sum(1 for r in recs if r.category in user_interests)
 
+    # Track which items are NEW since the last render so the click-driven
+    # reshuffle is visible (otherwise filter_seen makes the list "look the same").
+    import time as _time
+    state_key = f"prev_top_set::{user_id}::{mode}"
+    prev_top_set: set[str] = st.session_state.get(state_key, set())
+    current_top_set = {r.item_id for r in recs}
+    new_ids = current_top_set - prev_top_set if prev_top_set else set()
+    st.session_state[state_key] = current_top_set
+    last_recompute = _time.strftime("%H:%M:%S")
+
     # ── combined layout: recs (with breakdown) + explorer side by side ──
     left, right = st.columns([3, 2], gap="large")
 
@@ -279,6 +292,18 @@ def page_recommendations(rec: Recommender) -> None:
             f"### 🎯 Top {len(recs)} recommendations · mode=`{mode}` "
             f"· {n_match}/{len(recs)} in declared interests"
         )
+        # Visible "the page just recomputed" indicator + new-item summary.
+        recompute_msg = f"🕐 recomputed at **{last_recompute}**"
+        if new_ids:
+            recompute_msg += f"  ·  🆕 **{len(new_ids)}** new in this list since last render"
+        st.caption(recompute_msg)
+        if mode == "long_term":
+            st.info(
+                "**`long_term` mode:** clicks affect *filtering* (clicked items disappear) "
+                "but not *ranking* — the long-term embedding is fixed. Switch to `adaptive` "
+                "in the sidebar to see session blending in action.",
+                icon="ℹ️",
+            )
 
         # Per-source candidate-pool stats (collapsible)
         with st.expander("🔬 How was this list assembled? (advanced)", expanded=False):
@@ -301,7 +326,11 @@ def page_recommendations(rec: Recommender) -> None:
             )
 
         for r in recs:
-            _render_recommendation(rec, user_id, r, user_interests, with_breakdown=True)
+            _render_recommendation(
+                rec, user_id, r, user_interests,
+                with_breakdown=True,
+                is_new=(r.item_id in new_ids),
+            )
 
     with right:
         st.markdown("### 🛒 Explore catalog")
