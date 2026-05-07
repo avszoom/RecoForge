@@ -1,8 +1,21 @@
 # RecoForge
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://recoforge-pckcgmxyyfmecwkm9em26x.streamlit.app/)
+
+**Live demo:** https://recoforge-pckcgmxyyfmecwkm9em26x.streamlit.app/
+
 A real-time recommendation system POC. An offline two-tower model learns long-term user/item embeddings; the online layer adapts recommendations to the user's current session within milliseconds; brand-new users and items are recommendable immediately via cold-start fallbacks.
 
-> **Source of truth for the design:** this README + [`src/models/README.md`](src/models/README.md) + [`data/README.md`](data/README.md).
+> **Source of truth for the design:** this README + [`src/models/README.md`](src/models/README.md) + [`data/README.md`](data/README.md) + [`src/serving/README.md`](src/serving/README.md).
+
+## Try the live demo
+
+The hosted app exposes four pages (sidebar):
+
+1. **🎯 Recommendations** — pick a user, click items in the right-column explorer, watch recs reshuffle live with per-item score breakdowns (`0.45 × ann + 0.25 × recent + 0.15 × cat_match + …`).
+2. **➕ Add new item** — cold-start a brand-new item via the trained item tower; the page automatically probes 5 users to verify it surfaces in their adaptive top-20.
+3. **🔬 User state debugger** — long-term vs adaptive side-by-side, blend weights, session-vs-long-term cosine.
+4. **📊 Evaluation** — Phase 8 results table: popularity vs category vs two-tower (long-term) vs two-tower (adaptive). Adaptive ~doubles long-term recall@10.
 
 ---
 
