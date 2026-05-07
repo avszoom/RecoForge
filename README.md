@@ -58,13 +58,29 @@ pip install -r requirements.txt
 # 2. generate the synthetic dataset (1k users, 4k items, ~84k interactions)
 python -m src.data.generate_dataset
 
-# 3. run the dataset tests
-pytest -q
+# 3. run the test suite (per-file isolation; see scripts/test.sh for why)
+./scripts/test.sh
 
-# 4. (Phase 2 onwards) train the two-tower model — to be implemented
-# python -m src.models.train_two_tower
+# 4. train the two-tower model
+python -m src.models.text_features         # ~5s on MPS, frozen MiniLM cache
+python -m src.models.train_two_tower       # ~25s on MPS, 10 epochs
+python -m src.models.export_embeddings     # exports user/item embeddings
+python -m src.indexing.build_faiss         # builds artifacts/item_index.faiss
 
-# 5. (Phase 7) launch the Streamlit demo — to be implemented
+# 5. produce a recommendation
+python -m src.serving.recommender u_0042                 # adaptive (default)
+python -m src.serving.recommender u_0042 --mode long_term
+
+# 6. record a click and watch the recs shift
+python -m src.serving.recommender u_0042 --click item_01234
+
+# 7. cold-start a brand-new user / item (Phase 6)
+python -m src.serving.add_user --interests "AI Infrastructure" \
+    --age-bucket 25-34 --location US --activity-level high --show-recs
+python -m src.serving.add_item --category Travel \
+    --title "A weekend in Porto" --body "Cheap flights, walkable streets..."
+
+# 8. (Phase 7) launch the Streamlit demo — to be implemented
 # streamlit run app/streamlit_app.py
 ```
 
@@ -137,7 +153,7 @@ recommendationForge/
 - [x] **Phase 3** — FAISS item index (`src/indexing/`)
 - [x] **Phase 4** — Long-term-only recommender (`src/serving/recommender.py`)
 - [x] **Phase 5** — Online session adaptation + candidate generators
-- [ ] **Phase 6** — Add new user / new item flows (cold start)
+- [x] **Phase 6** — Add new user / new item flows (cold start)
 - [ ] **Phase 7** — Streamlit UI (4 pages)
 - [ ] **Phase 8** — Evaluation suite + baseline comparison
 

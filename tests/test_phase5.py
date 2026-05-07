@@ -74,7 +74,6 @@ def test_userstatestore_round_trip(tmp_path: Path) -> None:
 def recommender(tmp_path: Path) -> Recommender:
     if not _required_paths_exist():
         pytest.skip("artifacts/ + data/ not fully populated — run the pipeline first")
-    # Use a per-test user_state file to avoid cross-test contamination.
     return Recommender(ARTIFACTS, DATA, user_state_path=tmp_path / "state.json")
 
 

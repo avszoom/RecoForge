@@ -34,6 +34,17 @@ Programmatic usage:
 
 from __future__ import annotations
 
+import os
+# Set BEFORE importing torch or faiss. faiss-cpu and torch each ship their
+# own libomp; on macOS Apple Silicon a duplicate-libomp load segfaults
+# load_state_dict unless this is set.
+#
+# Note: this Recommender does NOT eagerly import torch. Cold-start
+# (`add_user`/`add_item`) does that lazily inside `cold_start.py`. Callers
+# that intend to use cold-start AND faiss in the same process must ensure
+# torch is imported BEFORE faiss — see tests/test_phase6.py for the pattern.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import argparse
 import json
 import logging
@@ -46,8 +57,10 @@ from typing import Literal
 
 import numpy as np
 
+from src.data.constants import ACTIVITY_LEVELS, AGE_BUCKETS, CATEGORIES, LOCATIONS
 from src.indexing.incremental_index import ItemIndex
 from src.serving.candidate_generators import generate_all
+from src.serving.cold_start import ColdStartEngine
 from src.serving.ranker import MergedCandidate, diversify, merge, rank
 from src.serving.user_state import UserState, UserStateStore
 
@@ -175,6 +188,14 @@ class Recommender:
         self._online_log_path: Path = data_dir / "online_interactions.jsonl"
         log.info("user_state path: %s · loaded states: %d", usp, len(self.user_state.states))
 
+        # ── Cold-start engine + persistence paths (Phase 6) ──────────────
+        self._artifacts_dir: Path = artifacts_dir
+        self._data_dir: Path = data_dir
+        self._users_path: Path = data_dir / "users.jsonl"
+        self._items_path: Path = data_dir / "items.jsonl"
+        # Lazy: ColdStartEngine doesn't load the model until first cold-start call.
+        self.cold_start: ColdStartEngine = ColdStartEngine(artifacts_dir)
+
     # ── lookups ──────────────────────────────────────────────────────────
 
     def has_user(self, user_id: str) -> bool:
@@ -256,6 +277,160 @@ class Recommender:
             with self._online_log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, separators=(",", ":")) + "\n")
             self.user_state.save()
+
+    # ── cold-start: new user / new item ──────────────────────────────────
+
+    def _next_user_id(self) -> str:
+        n = len(self.user_id_to_row)
+        while True:
+            candidate = f"u_{n:04d}"
+            if candidate not in self.user_id_to_row:
+                return candidate
+            n += 1
+
+    def _next_item_id(self) -> str:
+        n = len(self.items_by_id)
+        while True:
+            candidate = f"item_{n:05d}"
+            if candidate not in self.items_by_id:
+                return candidate
+            n += 1
+
+    def _persist_user_arrays(self) -> None:
+        """Save user_embeddings.npy + user_id_to_row.json (after add_user)."""
+        np.save(self._artifacts_dir / "user_embeddings.npy", self.user_emb)
+        with (self._artifacts_dir / "user_id_to_row.json").open("w", encoding="utf-8") as f:
+            json.dump(self.user_id_to_row, f)
+
+    def _persist_item_arrays(self) -> None:
+        """Save item_embeddings.npy + the FAISS index (after add_item)."""
+        np.save(self._artifacts_dir / "item_embeddings.npy", self.item_emb)
+        self.index.save(self._artifacts_dir)
+        # Keep item_id_to_row.json (used by build_faiss + tests) in sync with the FAISS map.
+        with (self._artifacts_dir / "item_id_to_row.json").open("w", encoding="utf-8") as f:
+            json.dump(self.index.item_id_to_row, f)
+
+    def add_user(
+        self, *,
+        age_bucket: str,
+        location: str,
+        interests: list[str],
+        activity_level: str = "medium",
+        user_id: str | None = None,
+        persist: bool = True,
+    ) -> str:
+        """Cold-start a brand-new user. Returns the assigned user_id.
+
+        Validates inputs against the canonical taxonomy, runs the user tower
+        with user_id=<UNK>, appends to users.jsonl, extends user_emb +
+        user_id_to_row, and (by default) persists the updated artifacts.
+        """
+        if user_id is None:
+            user_id = self._next_user_id()
+        if user_id in self.user_id_to_row:
+            raise ValueError(f"user_id already exists: {user_id!r}")
+        if age_bucket not in AGE_BUCKETS:
+            raise ValueError(f"unknown age_bucket: {age_bucket!r}")
+        if location not in LOCATIONS:
+            raise ValueError(f"unknown location: {location!r}")
+        if activity_level not in ACTIVITY_LEVELS:
+            raise ValueError(f"unknown activity_level: {activity_level!r}")
+        for c in interests:
+            if c not in CATEGORIES:
+                raise ValueError(f"unknown interest: {c!r}")
+        if not interests:
+            raise ValueError("interests must be non-empty")
+
+        # Cold-start tower forward (loads two_tower.pt + MiniLM on first call)
+        emb = self.cold_start.compute_user_embedding(activity_level=activity_level, interests=interests)
+        if emb.shape[0] != self.user_emb.shape[1]:
+            raise RuntimeError(
+                f"cold-start user dim {emb.shape[0]} != existing {self.user_emb.shape[1]}"
+            )
+
+        new_row = self.user_emb.shape[0]
+        self.user_emb = np.vstack([self.user_emb, emb[None, :]]).astype(np.float32)
+        self.user_id_to_row[user_id] = new_row
+
+        record = {
+            "user_id": user_id,
+            "age_bucket": age_bucket,
+            "location": location,
+            "interests": list(interests),
+            "activity_level": activity_level,
+        }
+        self.users_by_id[user_id] = record
+        if persist:
+            self._users_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._users_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, separators=(",", ":")) + "\n")
+            self._persist_user_arrays()
+
+        log.info("add_user: %s  interests=%s  activity=%s", user_id, interests, activity_level)
+        return user_id
+
+    def add_item(
+        self, *,
+        category: str,
+        title: str,
+        body: str,
+        topic: str = "",
+        creator_id: str | None = None,
+        item_id: str | None = None,
+        persist: bool = True,
+    ) -> str:
+        """Cold-start a brand-new item. Returns the assigned item_id.
+
+        Runs the item tower with item_id=<UNK>, freshness=1.0, popularity=0.0;
+        adds to FAISS, items_by_id, items_by_category, fresh_items_sorted;
+        appends to items.jsonl; persists updated arrays.
+        """
+        if item_id is None:
+            item_id = self._next_item_id()
+        if item_id in self.items_by_id:
+            raise ValueError(f"item_id already exists: {item_id!r}")
+        if category not in CATEGORIES:
+            raise ValueError(f"unknown category: {category!r}")
+        if not title or not body:
+            raise ValueError("title and body are required")
+
+        emb = self.cold_start.compute_item_embedding(
+            category=category, title=title, body=body, popularity=0.0, freshness=1.0,
+        )
+        if emb.shape[0] != self.item_emb.shape[1]:
+            raise RuntimeError(
+                f"cold-start item dim {emb.shape[0]} != existing {self.item_emb.shape[1]}"
+            )
+
+        # Insert into FAISS (also updates item_id_to_row inside the index)
+        self.index.add(item_id, emb)
+        # Mirror in our item_emb numpy cache (used by similar_to_recent)
+        self.item_emb = np.vstack([self.item_emb, emb[None, :]]).astype(np.float32)
+
+        record = {
+            "item_id": item_id,
+            "category": category,
+            "topic": topic or category.lower(),
+            "title": title,
+            "body": body,
+            "creator_id": creator_id or "creator_new",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "popularity_score": 0.0,
+        }
+        self.items_by_id[item_id] = record
+        # Keep items_by_category sorted by popularity desc (new item lands at the end since pop=0).
+        self.items_by_category.setdefault(category, []).append(record)
+        # Add to fresh pool at the head (age = 0).
+        self.fresh_items_sorted.insert(0, (item_id, 0.0))
+
+        if persist:
+            self._items_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._items_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, separators=(",", ":")) + "\n")
+            self._persist_item_arrays()
+
+        log.info("add_item: %s  category=%s  title=%r", item_id, category, title[:50])
+        return item_id
 
     # ── recommend ────────────────────────────────────────────────────────
 
