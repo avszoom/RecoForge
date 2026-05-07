@@ -80,8 +80,13 @@ python -m src.serving.add_user --interests "AI Infrastructure" \
 python -m src.serving.add_item --category Travel \
     --title "A weekend in Porto" --body "Cheap flights, walkable streets..."
 
-# 8. (Phase 7) launch the Streamlit demo — to be implemented
-# streamlit run app/streamlit_app.py
+# 8. launch the Streamlit demo
+streamlit run app/streamlit_app.py
+# Then open http://localhost:8501 — four pages in the sidebar:
+#   1. Recommendations          — pick a user, click items, watch recs adapt
+#   2. Add new item             — Phase 6 cold-start with verification
+#   3. User state debugger      — long_term vs adaptive side-by-side
+#   4. Evaluation               — Phase 8 placeholder
 ```
 
 ---
@@ -154,7 +159,7 @@ recommendationForge/
 - [x] **Phase 4** — Long-term-only recommender (`src/serving/recommender.py`)
 - [x] **Phase 5** — Online session adaptation + candidate generators
 - [x] **Phase 6** — Add new user / new item flows (cold start)
-- [ ] **Phase 7** — Streamlit UI (4 pages)
+- [x] **Phase 7** — Streamlit UI (4 pages)
 - [ ] **Phase 8** — Evaluation suite + baseline comparison
 
 ---
