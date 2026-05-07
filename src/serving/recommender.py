@@ -465,6 +465,26 @@ class Recommender:
         log.info("add_item: %s  category=%s  title=%r", item_id, category, title[:50])
         return item_id
 
+    # ── introspection (for UI breakdown panels) ──────────────────────────
+
+    def generate_candidate_pools(
+        self, user_id: str, *, blend: tuple[float, float] | None = None,
+    ) -> dict[str, list]:
+        """Run all candidate generators and return them by name (for UI debugging).
+
+        Same call as the adaptive recommender uses internally, but exposed so
+        the Streamlit page can show "this user's pool came from N items per
+        source" without re-implementing the logic.
+        """
+        ann, recent, trending, fresh, category = generate_all(self, user_id, blend=blend)
+        return {
+            "ann": ann,
+            "recent": recent,
+            "trending": trending,
+            "fresh": fresh,
+            "category": category,
+        }
+
     # ── recommend ────────────────────────────────────────────────────────
 
     def recommend(

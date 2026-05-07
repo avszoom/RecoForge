@@ -124,8 +124,16 @@ def _user_profile_card(rec: Recommender, user_id: str) -> None:
             st.caption("_No session clicks yet — click items below to see live adaptation._")
 
 
-def _render_recommendation(rec: Recommender, user_id: str, r: Recommendation, user_interests: set[str]) -> None:
-    """Render a single Recommendation card with a click button."""
+def _render_recommendation(
+    rec: Recommender, user_id: str, r: Recommendation, user_interests: set[str],
+    *, with_breakdown: bool = False,
+) -> None:
+    """Render a single Recommendation card with a click button.
+
+    If `with_breakdown=True`, attaches a per-source score-decomposition expander.
+    """
+    from src.serving.ranker import RANK_WEIGHTS
+
     container = st.container(border=True)
     cols = container.columns([8, 2, 1])
     with cols[0]:
@@ -144,6 +152,26 @@ def _render_recommendation(rec: Recommender, user_id: str, r: Recommendation, us
             rec.on_click(user_id, r.item_id)
             st.toast(f"Clicked {r.item_id} ({r.category})", icon="✅")
             st.rerun()
+
+    if with_breakdown:
+        cat_match = 1.0 if r.category in user_interests else 0.0
+        with container.expander("🔬 How was this scored?"):
+            rows = [
+                ("ann (FAISS / blended user emb)", r.source_scores.get("ann", 0.0),    RANK_WEIGHTS["ann"]),
+                ("recent (similar to recent clicks)", r.source_scores.get("recent", 0.0), RANK_WEIGHTS["recent"]),
+                ("category_match (in declared interests?)", cat_match,                  RANK_WEIGHTS["category_match"]),
+                ("trending (popular this period)",      r.source_scores.get("trending", 0.0), RANK_WEIGHTS["trending"]),
+                ("fresh (new in last 7 days)",          r.source_scores.get("fresh", 0.0),    RANK_WEIGHTS["fresh"]),
+            ]
+            lines = ["| source | raw score | × weight | = contribution |", "|---|---:|---:|---:|"]
+            total = 0.0
+            for name, raw, weight in rows:
+                contribution = raw * weight
+                total += contribution
+                bold = "**" if contribution > 0.01 else ""
+                lines.append(f"| {bold}{name}{bold} | {raw:.3f} | {weight:.2f} | {bold}{contribution:.4f}{bold} |")
+            lines.append(f"| | | | **TOTAL: {total:.4f}** |")
+            st.markdown("\n".join(lines))
 
 
 # ─── page 1 — Recommendations ────────────────────────────────────────────
@@ -241,15 +269,82 @@ def page_recommendations(rec: Recommender) -> None:
     profile = rec.user_profile(user_id) or {}
     user_interests = set(profile.get("interests", []))
     recs = rec.recommend(user_id, k=k, mode=mode, blend=blend_override)
-
     n_match = sum(1 for r in recs if r.category in user_interests)
-    st.markdown(
-        f"### Top {len(recs)} recommendations  ·  mode = `{mode}`  "
-        f"·  {n_match}/{len(recs)} in declared interests"
-    )
 
-    for r in recs:
-        _render_recommendation(rec, user_id, r, user_interests)
+    # ── combined layout: recs (with breakdown) + explorer side by side ──
+    left, right = st.columns([3, 2], gap="large")
+
+    with left:
+        st.markdown(
+            f"### 🎯 Top {len(recs)} recommendations · mode=`{mode}` "
+            f"· {n_match}/{len(recs)} in declared interests"
+        )
+
+        # Per-source candidate-pool stats (collapsible)
+        with st.expander("🔬 How was this list assembled? (advanced)", expanded=False):
+            pools = rec.generate_candidate_pools(user_id, blend=blend_override)
+            counts_md = "\n".join(
+                f"- **{name}_long_term**: {len(pool)} candidates"
+                for name, pool in pools.items()
+            )
+            st.markdown(
+                "**Linear scorer** (final = weighted sum, top-8 personalized + 1 trending + 1 fresh):\n"
+                "```\n"
+                "score = 0.45 * ann\n"
+                "      + 0.25 * recent_similarity\n"
+                "      + 0.15 * category_match\n"
+                "      + 0.10 * trending\n"
+                "      + 0.05 * freshness\n"
+                "```\n\n"
+                f"**Candidate pools for `{user_id}`:**\n{counts_md}\n\n"
+                "Each rec card has a 🔬 expander showing its individual score breakdown."
+            )
+
+        for r in recs:
+            _render_recommendation(rec, user_id, r, user_interests, with_breakdown=True)
+
+    with right:
+        st.markdown("### 🛒 Explore catalog")
+        st.caption("Click items here → recs on the left update live.")
+
+        cat_options = sorted(rec.items_by_category.keys())
+        category = st.selectbox("Category", cat_options, key="explore_cat_live")
+        sort_by = st.selectbox(
+            "Sort", ["popularity (desc)", "newest first", "title A→Z"],
+            key="explore_sort_live",
+        )
+        n_show = st.slider("show", min_value=10, max_value=30, value=15, step=5, key="explore_n_live")
+
+        items = list(rec.items_by_category.get(category, []))
+        if sort_by == "popularity (desc)":
+            items.sort(key=lambda it: it["popularity_score"], reverse=True)
+        elif sort_by == "newest first":
+            items.sort(key=lambda it: it["created_at"], reverse=True)
+        elif sort_by == "title A→Z":
+            items.sort(key=lambda it: it["title"].lower())
+        items = items[:n_show]
+
+        seen = rec.seen_items(user_id)
+        in_interest = category in user_interests
+        flag = "★ in declared interests" if in_interest else "(not declared — great for testing)"
+        st.caption(f"**{category}** · {len(items)} items · {flag}")
+
+        for item in items:
+            row = st.container(border=True)
+            cols = row.columns([5, 1])
+            with cols[0]:
+                seen_mark = " ✓" if item["item_id"] in seen else ""
+                cols[0].markdown(f"**{item['title']}**{seen_mark}")
+                cols[0].caption(
+                    f":green-background[{item['category']}] · "
+                    f"pop {item['popularity_score']:.2f} · {item['created_at'][:10]}"
+                )
+            with cols[1]:
+                if cols[1].button("👍", key=f"explore_live_btn_{item['item_id']}",
+                                  help="Click — recs on the left will update"):
+                    rec.on_click(user_id, item["item_id"])
+                    st.toast(f"Clicked ({item['category']})", icon="✅")
+                    st.rerun()
 
 
 # ─── page 2 — Add new item ───────────────────────────────────────────────
@@ -521,8 +616,7 @@ def page_evaluation() -> None:
 
 
 PAGES = {
-    "🎯 Recommendations":      page_recommendations,
-    "🛒 Item explorer":        page_explorer,
+    "🎯 Recommendations":      page_recommendations,    # recs + score breakdown + explorer in one
     "➕ Add new item":          page_add_item,
     "🔬 User state debugger":  page_debugger,
     "📊 Evaluation":           page_evaluation,
