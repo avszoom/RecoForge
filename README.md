@@ -176,4 +176,6 @@ recommendationForge/
 ## See also
 
 - [`data/README.md`](data/README.md) — what the synthetic dataset contains and how it is generated.
-- [`src/models/README.md`](src/models/README.md) — two-tower architecture, training objective, cold-start mechanics.
+- [`src/models/README.md`](src/models/README.md) — two-tower architecture, training objective, known limitations + V2 roadmap.
+- [`src/indexing/README.md`](src/indexing/README.md) — FAISS index design + `ItemIndex` API.
+- [`src/serving/README.md`](src/serving/README.md) — Phase 4 (long-term recommender), Phase 5 (online adaptation, candidate generators, ranker, diversifier), Phase 6 (cold start), CLI cheat sheet, test infrastructure notes.
